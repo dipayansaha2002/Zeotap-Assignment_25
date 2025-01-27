@@ -1,0 +1,103 @@
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import davies_bouldin_score
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.decomposition import PCA
+
+def create_clustering_features(customers_df, transactions_df):
+    # Calculate customer metrics
+    customer_metrics = transactions_df.groupby('CustomerID').agg({
+        'TransactionID': 'count',
+        'TotalValue': ['sum', 'mean', 'std'],
+        'Quantity': ['sum', 'mean']
+    }).reset_index()
+    
+    # Flatten column names
+    customer_metrics.columns = ['CustomerID', 'transaction_count', 'total_spend', 
+                              'avg_transaction_value', 'std_transaction_value',
+                              'total_quantity', 'avg_quantity']
+    
+    # Calculate recency, frequency, monetary values
+    last_transaction_date = transactions_df['TransactionDate'].max()
+    
+    rfm = transactions_df.groupby('CustomerID').agg({
+        'TransactionDate': lambda x: (last_transaction_date - x.max()).days,  # Recency
+        'TransactionID': 'count',  # Frequency
+        'TotalValue': 'sum'  # Monetary
+    }).reset_index()
+    
+    rfm.columns = ['CustomerID', 'recency', 'frequency', 'monetary']
+    
+    # Combine features
+    clustering_features = pd.merge(
+        customer_metrics,
+        rfm,
+        on='CustomerID'
+    )
+    
+    return clustering_features
+
+def perform_clustering(features_df, n_clusters=5):
+    # Scale features
+    scaler = StandardScaler()
+    scaled_features = scaler.fit_transform(features_df.drop('CustomerID', axis=1))
+    
+    # Perform clustering
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    cluster_labels = kmeans.fit_predict(scaled_features)
+    
+    # Calculate DB Index
+    db_index = davies_bouldin_score(scaled_features, cluster_labels)
+    
+    # Add cluster labels to features
+    clustered_df = features_df.copy()
+    clustered_df['Cluster'] = cluster_labels
+    
+    # Perform PCA for visualization
+    pca = PCA(n_components=2)
+    pca_features = pca.fit_transform(scaled_features)
+    
+    # Create visualization
+    plt.figure(figsize=(12, 8))
+    scatter = plt.scatter(pca_features[:, 0], pca_features[:, 1], 
+                         c=cluster_labels, cmap='viridis')
+    plt.title('Customer Segments Visualization (PCA)')
+    plt.xlabel('First Principal Component')
+    plt.ylabel('Second Principal Component')
+    plt.colorbar(scatter, label='Cluster')
+    plt.show()
+    
+    # Calculate cluster profiles
+    cluster_profiles = clustered_df.groupby('Cluster').agg({
+        'transaction_count': 'mean',
+        'total_spend': 'mean',
+        'avg_transaction_value': 'mean',
+        'recency': 'mean',
+        'frequency': 'mean',
+        'monetary': 'mean'
+    }).round(2)
+    
+    return clustered_df, db_index, cluster_profiles
+
+# Find optimal number of clusters
+def find_optimal_clusters(features_df, max_clusters=10):
+    db_scores = []
+    for n_clusters in range(2, max_clusters + 1):
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        labels = kmeans.fit_predict(StandardScaler().fit_transform(
+            features_df.drop('CustomerID', axis=1)))
+        db_score = davies_bouldin_score(
+            StandardScaler().fit_transform(features_df.drop('CustomerID', axis=1)),
+            labels
+        )
+        db_scores.append(db_score)
+    
+    # Plot DB Index scores
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(2, max_clusters + 1), db_scores, marker='o')
+    plt.xlabel('Number of Clusters')
+    plt.ylabel('Davies-Bouldin Index')
+    plt.title('Davies-Bouldin Index vs Number of Clusters')
