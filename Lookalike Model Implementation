@@ -1,0 +1,111 @@
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics.pairwise import cosine_similarity
+
+def create_customer_features(customers_df, transactions_df, products_df):
+    # Calculate customer transaction features
+    customer_metrics = transactions_df.groupby('CustomerID').agg({
+        'TransactionID': 'count',
+        'TotalValue': ['sum', 'mean', 'std'],
+        'Quantity': ['sum', 'mean']
+    }).reset_index()
+    
+    # Flatten column names
+    customer_metrics.columns = ['CustomerID', 'transaction_count', 'total_spend', 
+                              'avg_transaction_value', 'std_transaction_value',
+                              'total_quantity', 'avg_quantity']
+    
+    # Calculate days since first purchase
+    customer_first_purchase = transactions_df.groupby('CustomerID')['TransactionDate'].min().reset_index()
+    customer_first_purchase['days_since_first_purchase'] = (
+        pd.to_datetime('now') - pd.to_datetime(customer_first_purchase['TransactionDate'])
+    ).dt.days
+    
+    # Calculate category preferences
+    transaction_categories = pd.merge(
+        transactions_df,
+        products_df[['ProductID', 'Category']],
+        on='ProductID'
+    )
+    
+    category_preferences = pd.crosstab(
+        transaction_categories['CustomerID'],
+        transaction_categories['Category'],
+        values=transaction_categories['TotalValue'],
+        aggfunc='sum',
+        normalize='index'
+    ).fillna(0)
+    
+    # Combine all features
+    customer_features = pd.merge(
+        customer_metrics,
+        customer_first_purchase[['CustomerID', 'days_since_first_purchase']],
+        on='CustomerID'
+    )
+    
+    customer_features = pd.merge(
+        customer_features,
+        category_preferences,
+        left_on='CustomerID',
+        right_index=True
+    )
+    
+    return customer_features
+
+def find_lookalikes(customer_features, target_customer_id, n_recommendations=3):
+    # Scale features
+    scaler = StandardScaler()
+    scaled_features = scaler.fit_transform(customer_features.drop('CustomerID', axis=1))
+    
+    # Calculate similarity scores
+    similarity_matrix = cosine_similarity(scaled_features)
+    
+    # Get target customer index
+    target_idx = customer_features[customer_features['CustomerID'] == target_customer_id].index[0]
+    
+    # Get similarity scores for target customer
+    similarity_scores = similarity_matrix[target_idx]
+    
+    # Get indices of top similar customers (excluding self)
+    similar_indices = np.argsort(similarity_scores)[::-1][1:n_recommendations+1]
+    
+    # Create recommendations dataframe
+    recommendations = pd.DataFrame({
+        'similar_customer_id': customer_features.iloc[similar_indices]['CustomerID'].values,
+        'similarity_score': similarity_scores[similar_indices]
+    })
+    
+    return recommendations
+
+# Create features and find lookalikes for first 20 customers
+def generate_lookalike_recommendations(customers_df, transactions_df, products_df):
+    # Create customer features
+    customer_features = create_customer_features(customers_df, transactions_df, products_df)
+    
+    # Generate recommendations for first 20 customers
+    recommendations_dict = {}
+    
+    for customer_id in customers_df['CustomerID'].iloc[:20]:
+        recommendations = find_lookalikes(customer_features, customer_id)
+        recommendations_dict[customer_id] = recommendations.to_dict('records')
+    
+    # Create output DataFrame
+    output_data = []
+    for customer_id, recs in recommendations_dict.items():
+        row = {
+            'customer_id': customer_id,
+            'lookalikes': [
+                f"{rec['similar_customer_id']}:{rec['similarity_score']:.3f}"
+                for rec in recs
+            ]
+        }
+        output_data.append(row)
+    
+    lookalike_df = pd.DataFrame(output_data)
+    lookalike_df.to_csv('FirstName_LastName_Lookalike.csv', index=False)
+    
+    return lookalike_df
+
+# Generate recommendations
+lookalike_results = generate_lookalike_recommendations(customers_df, transactions_df, products_df)
