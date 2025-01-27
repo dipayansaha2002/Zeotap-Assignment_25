@@ -1,0 +1,112 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime
+
+# Read the datasets
+customers_df = pd.read_csv('Customers.csv')
+products_df = pd.read_csv('Products.csv')
+transactions_df = pd.read_csv('Transactions.csv')
+
+# Basic data exploration
+def explore_dataset(df, name):
+    print(f"\n{name} Dataset Analysis:")
+    print("-" * 50)
+    print(f"Shape: {df.shape}")
+    print("\nColumns:", df.columns.tolist())
+    print("\nData Types:")
+    print(df.dtypes)
+    print("\nMissing Values:")
+    print(df.isnull().sum())
+    print("\nSample Data:")
+    print(df.head())
+
+# Convert date columns to datetime
+customers_df['SignupDate'] = pd.to_datetime(customers_df['SignupDate'])
+transactions_df['TransactionDate'] = pd.to_datetime(transactions_df['TransactionDate'])
+
+# Perform EDA for each dataset
+explore_dataset(customers_df, "Customers")
+explore_dataset(products_df, "Products")
+explore_dataset(transactions_df, "Transactions")
+
+# Customer Analysis
+customer_purchase_freq = transactions_df.groupby('CustomerID').size().reset_index(name='purchase_count')
+customer_total_value = transactions_df.groupby('CustomerID')['TotalValue'].sum().reset_index()
+customer_avg_order = transactions_df.groupby('CustomerID')['TotalValue'].mean().reset_index()
+
+# Product Analysis
+product_sales = transactions_df.groupby('ProductID').agg({
+    'Quantity': 'sum',
+    'TotalValue': 'sum'
+}).reset_index()
+
+# Regional Analysis
+customer_region_sales = pd.merge(transactions_df, customers_df[['CustomerID', 'Region']], on='CustomerID')
+region_sales = customer_region_sales.groupby('Region').agg({
+    'TransactionID': 'count',
+    'TotalValue': 'sum'
+}).reset_index()
+
+# Time-based Analysis
+transactions_df['Month'] = transactions_df['TransactionDate'].dt.month
+transactions_df['Year'] = transactions_df['TransactionDate'].dt.year
+monthly_sales = transactions_df.groupby(['Year', 'Month'])['TotalValue'].sum().reset_index()
+
+# Category Analysis
+product_category = pd.merge(transactions_df, products_df[['ProductID', 'Category']], on='ProductID')
+category_sales = product_category.groupby('Category').agg({
+    'TransactionID': 'count',
+    'TotalValue': 'sum'
+}).reset_index()
+
+# Customer Lifetime Value Analysis
+customer_lifetime = pd.merge(
+    customer_total_value,
+    customers_df[['CustomerID', 'SignupDate']],
+    on='CustomerID'
+)
+customer_lifetime['days_since_signup'] = (
+    datetime.now() - customer_lifetime['SignupDate']
+).dt.days
+customer_lifetime['daily_value'] = customer_lifetime['TotalValue'] / customer_lifetime['days_since_signup']
+
+# Visualizations
+plt.figure(figsize=(15, 10))
+
+# Plot 1: Monthly Sales Trend
+plt.subplot(2, 2, 1)
+sns.lineplot(data=monthly_sales, x='Month', y='TotalValue')
+plt.title('Monthly Sales Trend')
+
+# Plot 2: Regional Sales Distribution
+plt.subplot(2, 2, 2)
+sns.barplot(data=region_sales, x='Region', y='TotalValue')
+plt.title('Sales by Region')
+plt.xticks(rotation=45)
+
+# Plot 3: Category Distribution
+plt.subplot(2, 2, 3)
+sns.barplot(data=category_sales, x='Category', y='TotalValue')
+plt.title('Sales by Category')
+plt.xticks(rotation=45)
+
+# Plot 4: Customer Purchase Frequency Distribution
+plt.subplot(2, 2, 4)
+sns.histplot(data=customer_purchase_freq, x='purchase_count', bins=30)
+plt.title('Customer Purchase Frequency Distribution')
+
+plt.tight_layout()
+plt.show()
+
+# Save key metrics for reporting
+eda_metrics = {
+    'total_customers': len(customers_df),
+    'total_products': len(products_df),
+    'total_transactions': len(transactions_df),
+    'total_revenue': transactions_df['TotalValue'].sum(),
+    'avg_order_value': transactions_df['TotalValue'].mean(),
+    'top_region': region_sales.iloc[region_sales['TotalValue'].argmax()]['Region'],
+    'top_category': category_sales.iloc[category_sales['TotalValue'].argmax()]['Category']
+}
